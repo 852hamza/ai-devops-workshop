@@ -1,0 +1,56 @@
+name: destroy
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: Type "destroy" to delete the server and everything else Terraform created
+        required: true
+
+# same group as the pipeline, so it waits for a running deploy instead of fighting it
+concurrency:
+  group: pipeline-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION }}
+  TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
+  TF_VERSION: 1.16.7
+  TF_IN_AUTOMATION: "true"
+  TF_VAR_aws_region: ${{ vars.AWS_REGION }}
+
+jobs:
+  destroy:
+    name: terraform destroy
+    if: inputs.confirm == 'destroy'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          mask-aws-account-id: false
+
+      - name: terraform init
+        run: scripts/tf-init.sh
+
+      - name: terraform destroy
+        run: terraform -chdir=infra destroy -input=false -auto-approve
+
+      - name: Summary
+        run: |
+          {
+            echo "### Infrastructure destroyed"
+            echo "Next: empty the tfstate bucket in S3, then delete the CloudFormation stack."
+          } >> "$GITHUB_STEP_SUMMARY"

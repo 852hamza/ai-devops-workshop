@@ -260,3 +260,71 @@ jobs:
 
           echo "::error::$url never answered with version $version. Check k8s/service.yaml and k8s/ingress.yaml."
           exit 1
+
+  explain:
+    name: AI failure explainer
+    needs: [changes, terraform, build, deploy]
+    if: failure()
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read # to download the logs of the failed jobs
+      contents: read
+    env:
+      # Copilot only runs if the repo has a COPILOT_PAT secret (token of an account with GitHub Copilot).
+      HAS_COPILOT: ${{ secrets.COPILOT_PAT != '' }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Collect logs of the failed jobs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          scripts/collect-failed-logs.sh > failed-logs.txt
+          {
+            echo "These GitHub Actions jobs failed. Here are the last lines of each one:"
+            echo
+            tail -c 12000 failed-logs.txt
+          } > prompt.txt
+
+      - uses: actions/setup-node@v7
+        if: env.HAS_COPILOT == 'true'
+        with:
+          node-version: 24
+
+      - name: Install Copilot CLI
+        if: env.HAS_COPILOT == 'true'
+        run: npm install -g @github/copilot@1.0.105
+
+      - name: Ask Copilot
+        id: ai
+        if: env.HAS_COPILOT == 'true'
+        continue-on-error: true # never fail the run because of the explainer
+        uses: actions/ai-inference@v3
+        with:
+          model: ${{ vars.AI_MODEL || 'gpt-4.1' }}
+          system-prompt-file: .github/prompts/explain-failure.txt
+          prompt-file: prompt.txt
+        env:
+          COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_PAT }}
+
+      - name: Write the summary
+        env:
+          ANSWER: ${{ steps.ai.outputs.response-file }}
+        run: |
+          {
+            echo "## AI failure explainer"
+            echo
+            if [ -n "$ANSWER" ] && [ -s "$ANSWER" ]; then
+              cat "$ANSWER"
+              echo
+              echo "_Written by GitHub Copilot from the failed logs. Check it against the log before changing anything._"
+            else
+              echo "Copy the log below into **Copilot Chat** in your Codespace with this prompt:"
+              echo
+              echo "> My GitHub Actions pipeline failed. Explain what failed, the most likely cause and the exact fix, in simple words."
+              echo
+              echo '````text'
+              tail -c 4000 failed-logs.txt
+              echo '````'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
