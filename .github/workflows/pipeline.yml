@@ -1,0 +1,123 @@
+name: pipeline
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+  workflow_dispatch:
+    inputs:
+      force_infra:
+        description: Run Terraform even if infra/ did not change
+        type: boolean
+        default: false
+
+# One run at a time. Two Terraform applies on the same state would clash.
+concurrency:
+  group: pipeline-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  id-token: write # needed for the OIDC login to AWS
+  contents: read
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION }}
+  TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
+  ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
+  TF_VERSION: 1.16.7
+  TF_IN_AUTOMATION: "true"
+  TF_VAR_aws_region: ${{ vars.AWS_REGION }}
+
+jobs:
+  changes:
+    name: Detect changes
+    runs-on: ubuntu-latest
+    outputs:
+      infra: ${{ steps.decide.outputs.infra }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Check repository settings
+        env:
+          HAS_ROLE: ${{ secrets.AWS_ROLE_ARN != '' }}
+        run: |
+          missing=0
+          for v in AWS_REGION TF_STATE_BUCKET ECR_REPOSITORY; do
+            if [ -z "${!v}" ]; then
+              echo "::error::Repository variable $v is missing (Settings > Secrets and variables > Actions > Variables)"
+              missing=1
+            fi
+          done
+          if [ "$HAS_ROLE" != "true" ]; then
+            echo "::error::Repository secret AWS_ROLE_ARN is missing (Settings > Secrets and variables > Actions > Secrets)"
+            missing=1
+          fi
+          exit $missing
+
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Decide if Terraform should run
+        id: decide
+        env:
+          BEFORE: ${{ github.event.before }}
+          FORCE: ${{ inputs.force_infra }}
+        run: |
+          # How many resources does the state already have? (0 on the first run or after destroy)
+          resources=$(aws s3 cp "s3://$TF_STATE_BUCKET/workshop/terraform.tfstate" - 2>/dev/null \
+            | jq '[.resources[]? | select(.mode == "managed")] | length' || echo 0)
+
+          if [ "$FORCE" = "true" ]; then
+            run=true; reason="started by hand with force_infra"
+          elif [ "${resources:-0}" -eq 0 ]; then
+            run=true; reason="no infrastructure yet"
+          elif [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            run=false; reason="manual run without force_infra"
+          elif ! git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+            run=true; reason="can't compare with the previous push"
+          elif git diff --quiet "$BEFORE" HEAD -- infra/; then
+            run=false; reason="infra/ did not change"
+          else
+            run=true; reason="infra/ changed"
+          fi
+
+          echo "infra=$run" >> "$GITHUB_OUTPUT"
+          echo "Run Terraform: **$run** ($reason)" | tee -a "$GITHUB_STEP_SUMMARY"
+
+  terraform:
+    name: Terraform
+    needs: changes
+    if: needs.changes.outputs.infra == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: terraform init
+        run: scripts/tf-init.sh
+
+      - name: terraform plan
+        run: |
+          terraform -chdir=infra plan -input=false -no-color -out=tfplan | tee plan.txt
+          grep -E '^(Plan:|No changes)' plan.txt >> "$GITHUB_STEP_SUMMARY" || true
+
+      - name: terraform apply
+        run: terraform -chdir=infra apply -input=false tfplan
+
+      - name: Wait for the k3d cluster
+        run: scripts/ssm-exec.sh "$(terraform -chdir=infra output -raw instance_id)" scripts/wait-ready.sh 900
