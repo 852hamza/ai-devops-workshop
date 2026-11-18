@@ -1,0 +1,4 @@
+# Only these files are sent to docker build.
+*
+!app.py
+!requirements.txt
