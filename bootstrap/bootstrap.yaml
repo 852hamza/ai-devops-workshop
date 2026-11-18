@@ -1,0 +1,178 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  One-time setup for the AI-Powered DevOps workshop: Terraform state bucket,
+  ECR repository, and an IAM role GitHub Actions can assume through OIDC.
+
+Parameters:
+  GitHubOwner:
+    Type: String
+    Description: Your GitHub username, exactly as in your repository URL (case matters).
+    AllowedPattern: "[A-Za-z0-9-]+"
+  RepositoryName:
+    Type: String
+    Default: ai-devops-workshop
+  EcrRepositoryName:
+    Type: String
+    Default: workshop-app
+  CreateOIDCProvider:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: Set to false if this account already has the token.actions.githubusercontent.com identity provider.
+
+Conditions:
+  CreateProvider: !Equals [!Ref CreateOIDCProvider, "true"]
+
+Resources:
+  GitHubOIDCProvider:
+    Type: AWS::IAM::OIDCProvider
+    Condition: CreateProvider
+    Properties:
+      Url: https://token.actions.githubusercontent.com
+      ClientIdList:
+        - sts.amazonaws.com
+      ThumbprintList:
+        - 6938fd4d98bab03faadb97b34396831e3780aea1
+        - 1c58a3a8518e8759bf075b76b750d4f2df264fcd
+
+  StateBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub tfstate-${AWS::AccountId}-${AWS::Region}
+      VersioningConfiguration:
+        Status: Enabled
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  AppRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Ref EcrRepositoryName
+      EmptyOnDelete: true
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      LifecyclePolicy:
+        LifecyclePolicyText: >-
+          {"rules": [{"rulePriority": 1, "description": "keep the last 10 images",
+          "selection": {"tagStatus": "any", "countType": "imageCountMoreThan", "countNumber": 10},
+          "action": {"type": "expire"}}]}
+
+  GitHubActionsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${AWS::StackName}-github-actions
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !If
+                - CreateProvider
+                - !Ref GitHubOIDCProvider
+                - !Sub arn:aws:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+                # Only workflows running on the main branch of your repository.
+                token.actions.githubusercontent.com:sub: !Sub repo:${GitHubOwner}/${RepositoryName}:ref:refs/heads/main
+      Policies:
+        - PolicyName: workshop-pipeline
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: TerraformState
+                Effect: Allow
+                Action: s3:ListBucket
+                Resource: !GetAtt StateBucket.Arn
+              - Sid: TerraformStateObjects
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:DeleteObject
+                Resource: !Sub ${StateBucket.Arn}/*
+
+              - Sid: EcrLogin
+                Effect: Allow
+                Action: ecr:GetAuthorizationToken
+                Resource: "*"
+              - Sid: EcrPush
+                Effect: Allow
+                Action:
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:BatchGetImage
+                  - ecr:CompleteLayerUpload
+                  - ecr:DescribeImages
+                  - ecr:DescribeRepositories
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:InitiateLayerUpload
+                  - ecr:PutImage
+                  - ecr:UploadLayerPart
+                Resource: !GetAtt AppRepository.Arn
+
+              # Terraform manages the EC2 instance, security group and their tags.
+              - Sid: Ec2
+                Effect: Allow
+                Action: ec2:*
+                Resource: "*"
+
+              # Deploys run kubectl on the instance through Run Command.
+              - Sid: SsmRunCommand
+                Effect: Allow
+                Action:
+                  - ssm:DescribeInstanceInformation
+                  - ssm:GetCommandInvocation
+                  - ssm:ListCommandInvocations
+                  - ssm:SendCommand
+                Resource: "*"
+
+              # IAM only for roles and instance profiles named workshop-*.
+              - Sid: WorkshopIam
+                Effect: Allow
+                Action:
+                  - iam:AddRoleToInstanceProfile
+                  - iam:AttachRolePolicy
+                  - iam:CreateInstanceProfile
+                  - iam:CreateRole
+                  - iam:DeleteInstanceProfile
+                  - iam:DeleteRole
+                  - iam:DetachRolePolicy
+                  - iam:GetInstanceProfile
+                  - iam:GetRole
+                  - iam:ListAttachedRolePolicies
+                  - iam:ListInstanceProfileTags
+                  - iam:ListInstanceProfilesForRole
+                  - iam:ListRolePolicies
+                  - iam:ListRoleTags
+                  - iam:PassRole
+                  - iam:RemoveRoleFromInstanceProfile
+                  - iam:TagInstanceProfile
+                  - iam:TagRole
+                  - iam:UntagInstanceProfile
+                  - iam:UntagRole
+                Resource:
+                  - !Sub arn:aws:iam::${AWS::AccountId}:role/workshop-*
+                  - !Sub arn:aws:iam::${AWS::AccountId}:instance-profile/workshop-*
+
+Outputs:
+  AwsRoleArn:
+    Description: GitHub secret AWS_ROLE_ARN
+    Value: !GetAtt GitHubActionsRole.Arn
+  AwsRegion:
+    Description: GitHub variable AWS_REGION
+    Value: !Ref AWS::Region
+  TfStateBucket:
+    Description: GitHub variable TF_STATE_BUCKET
+    Value: !Ref StateBucket
+  EcrRepository:
+    Description: GitHub variable ECR_REPOSITORY
+    Value: !Ref AppRepository
