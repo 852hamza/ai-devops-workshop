@@ -270,8 +270,8 @@ jobs:
       actions: read # to download the logs of the failed jobs
       contents: read
     env:
-      # Copilot only runs if the repo has a COPILOT_PAT secret (token of an account with GitHub Copilot).
-      HAS_COPILOT: ${{ secrets.COPILOT_PAT != '' }}
+      # Gemini only runs if the repo has a GEMINI_API_KEY secret (free key from aistudio.google.com).
+      HAS_GEMINI: ${{ secrets.GEMINI_API_KEY != '' }}
     steps:
       - uses: actions/checkout@v7
 
@@ -286,40 +286,25 @@ jobs:
             tail -c 12000 failed-logs.txt
           } > prompt.txt
 
-      - uses: actions/setup-node@v7
-        if: env.HAS_COPILOT == 'true'
-        with:
-          node-version: 24
-
-      - name: Install Copilot CLI
-        if: env.HAS_COPILOT == 'true'
-        run: npm install -g @github/copilot@1.0.105
-
-      - name: Ask Copilot
-        id: ai
-        if: env.HAS_COPILOT == 'true'
+      - name: Ask Gemini
+        if: env.HAS_GEMINI == 'true'
         continue-on-error: true # never fail the run because of the explainer
-        uses: actions/ai-inference@v3
-        with:
-          model: ${{ vars.AI_MODEL || 'gpt-4.1' }}
-          system-prompt-file: .github/prompts/explain-failure.txt
-          prompt-file: prompt.txt
         env:
-          COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_PAT }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL: ${{ vars.AI_MODEL }}
+        run: scripts/ai-explain.sh prompt.txt > answer.md
 
       - name: Write the summary
-        env:
-          ANSWER: ${{ steps.ai.outputs.response-file }}
         run: |
           {
             echo "## AI failure explainer"
             echo
-            if [ -n "$ANSWER" ] && [ -s "$ANSWER" ]; then
-              cat "$ANSWER"
+            if [ -s answer.md ]; then
+              cat answer.md
               echo
-              echo "_Written by GitHub Copilot from the failed logs. Check it against the log before changing anything._"
+              echo "_Written by Google Gemini from the failed logs. Check it against the log before changing anything._"
             else
-              echo "Copy the log below into **Copilot Chat** in your Codespace with this prompt:"
+              echo "Copy the log below into **Copilot Chat** (or any AI chat) with this prompt:"
               echo
               echo "> My GitHub Actions pipeline failed. Explain what failed, the most likely cause and the exact fix, in simple words."
               echo

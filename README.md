@@ -34,6 +34,7 @@ No access keys are stored anywhere (GitHub logs in to AWS with OIDC) and the ser
 - [ ] **Budget alert:** Billing and Cost Management → Budgets → Create budget → $5 monthly budget, your email.
 - [ ] **Region:** at the top right of the AWS console, choose **Asia Pacific (Mumbai) ap-south-1**.
 - [ ] **GitHub account.** Students: apply for the free [GitHub Student Developer Pack](https://education.github.com) (it includes GitHub Copilot).
+- [ ] **Google account**, for a free Gemini API key in Lab 0.
 - [ ] **Your copy of this repo:** click **Use this template → Create a new repository**, name it exactly `ai-devops-workshop`.
 - [ ] **Codespace:** in your new repo, **Code → Codespaces → Create codespace on main**. Wait until the terminal prints `Workshop tools ready`, then close the tab.
 
@@ -60,9 +61,10 @@ The pipeline needs three things before it can log in to AWS, so we create them o
    | Variable | `TF_STATE_BUCKET` | `TfStateBucket` |
    | Variable | `ECR_REPOSITORY` | `EcrRepository` |
 
-5. Open the **Actions** tab. If it asks, enable workflows. You should see **pipeline** and **destroy**.
+5. **AI failure explainer (free):** open https://aistudio.google.com/apikey, sign in with Google, **Create API key**, and add it as a second secret named `GEMINI_API_KEY`. When a pipeline run fails, Gemini reads the logs and writes the cause and the fix into the run's Summary. (Free-tier requests may be used by Google to improve its products; GitHub hides your secrets in the logs.)
+6. Open the **Actions** tab. If it asks, enable workflows. You should see **pipeline** and **destroy**.
 
-✅ Checkpoint: stack is `CREATE_COMPLETE`, 1 secret + 3 variables added.
+✅ Checkpoint: stack is `CREATE_COMPLETE`, 2 secrets + 3 variables added.
 
 ---
 
@@ -197,7 +199,7 @@ Run the curl loop again: 5 pod names. This change is not in git, so the next pus
 
 ## Lab 4 · Break it, fix it with AI, roll back (20 min)
 
-**How to investigate any failure:** open the failed run → **Summary** → **AI failure explainer**. If your repo has no Copilot token, it shows the log and a prompt: paste both into Copilot Chat. Then open the red step and check that the AI's answer matches the log.
+**How to investigate any failure:** open the failed run → **Summary** → **AI failure explainer**: Gemini's explanation of what failed and how to fix it. (No `GEMINI_API_KEY`? It shows the log and a prompt instead: paste both into Copilot Chat.) Then open the red step and check that the AI's answer matches the log.
 
 **Scenario 1 · A failing test.** In `app/app.py` change `MESSAGE` to `"Hello from AI DevOps!"`, then `git commit -am "Change message" && git push`. Watch what the pipeline does and what happens to your live app. Find the cause with AI and fix it.
 
