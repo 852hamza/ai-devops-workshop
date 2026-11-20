@@ -6,6 +6,7 @@ on:
     paths-ignore:
       - "**.md"
       - "docs/**"
+      - ".devcontainer/**"
   workflow_dispatch:
     inputs:
       force_infra:
@@ -34,6 +35,8 @@ env:
 jobs:
   changes:
     name: Detect changes
+    # The template repo itself has no AWS settings; only copies made from it run the pipeline.
+    if: ${{ !github.event.repository.is_template }}
     runs-on: ubuntu-latest
     outputs:
       infra: ${{ steps.decide.outputs.infra }}
