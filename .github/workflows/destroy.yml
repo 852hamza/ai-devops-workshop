@@ -46,7 +46,8 @@ jobs:
         run: scripts/tf-init.sh
 
       - name: terraform destroy
-        run: terraform -chdir=infra destroy -input=false -auto-approve
+        # -lock-timeout: if a cancelled run still holds the state lock for a moment, wait instead of failing
+        run: terraform -chdir=infra destroy -input=false -auto-approve -lock-timeout=120s
 
       - name: Summary
         run: |
