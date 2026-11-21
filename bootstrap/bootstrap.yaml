@@ -82,8 +82,12 @@ Resources:
             Condition:
               StringEquals:
                 token.actions.githubusercontent.com:aud: sts.amazonaws.com
-                # Only workflows running on the main branch of your repository.
-                token.actions.githubusercontent.com:sub: !Sub repo:${GitHubOwner}/${RepositoryName}:ref:refs/heads/main
+              # Only workflows running on the main branch of your repository.
+              # Newer repos put immutable IDs in the subject (owner@123/repo@456), older ones don't.
+              StringLike:
+                token.actions.githubusercontent.com:sub:
+                  - !Sub repo:${GitHubOwner}/${RepositoryName}:ref:refs/heads/main
+                  - !Sub repo:${GitHubOwner}@*/${RepositoryName}@*:ref:refs/heads/main
       Policies:
         - PolicyName: workshop-pipeline
           PolicyDocument:
