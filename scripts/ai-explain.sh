@@ -18,13 +18,23 @@ body=$(jq -n \
     generationConfig: {maxOutputTokens: 4096}
   }')
 
-if ! resp=$(curl -sS --fail-with-body --max-time 90 \
-  -H "x-goog-api-key: $GEMINI_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d "$body" "$url"); then
-  echo "Gemini request failed: $(jq -r '.error.message // .' <<< "$resp" 2>/dev/null | head -c 300)" >&2
-  exit 1
-fi
+# The free tier often answers 503 (busy) or 429 (rate limit) for a moment, so try 3 times.
+for attempt in 1 2 3; do
+  resp=$(curl -sS --max-time 90 -w '\n%{http_code}' \
+    -H "x-goog-api-key: $GEMINI_API_KEY" \
+    -H "Content-Type: application/json" \
+    -d "$body" "$url") || resp=$'\n000'
+  code=${resp##*$'\n'}
+  resp=${resp%$'\n'*}
+  [ "$code" = 200 ] && break
+
+  echo "Gemini attempt $attempt: HTTP $code $(jq -r '.error.message // empty' <<< "$resp" 2>/dev/null | head -c 300)" >&2
+  case $code in
+    429 | 500 | 503 | 000) [ "$attempt" -lt 3 ] && sleep $((attempt * 15)) ;;
+    *) exit 1 ;;
+  esac
+done
+[ "$code" = 200 ] || exit 1
 
 answer=$(jq -r '[.candidates[0].content.parts[]?.text // empty] | join("")' <<< "$resp")
 if [ -z "$answer" ]; then

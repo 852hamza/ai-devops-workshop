@@ -14,7 +14,7 @@ Codespace ──git push──▶ GitHub Actions
 Browser ──▶ http://<server-ip>/ ──▶ Traefik Ingress ──▶ Service ──▶ Pods
 ```
 
-No access keys are stored anywhere (GitHub logs in to AWS with OIDC) and the server has no SSH port.
+No access keys are stored anywhere: GitHub logs in to AWS with OIDC, and the pipeline reaches the server through Systems Manager, not SSH.
 
 | Folder | What's inside |
 |---|---|
@@ -120,7 +120,7 @@ git commit -m "Add Dockerfile"
 
 ## Lab 2 · Infrastructure from a push (30 min)
 
-**1. Read `infra/main.tf`.** Notice: port 80 and 30080 open, **no port 22**; the server's IAM role can only use Systems Manager and read from ECR. Ask Copilot: *"Explain this Terraform file resource by resource."*
+**1. Read `infra/main.tf`.** Notice: ports 80, 30080 and 22 (SSH, for you, not for the pipeline) open; the server's IAM role can only use Systems Manager and read from ECR. Ask Copilot: *"Explain this Terraform file resource by resource."*
 
 **2. Check it locally** (does not touch AWS):
 
@@ -149,7 +149,9 @@ Open **Actions** and click the running workflow. The first run takes about 8–1
 
 ## Lab 3 · Kubernetes: NodePort, Ingress, scaling (35 min)
 
-**1. A terminal on the server, without SSH.** EC2 → Instances → `workshop-k3d` → **Connect** → **Session Manager** → **Connect**.
+**1. A terminal on the server.** EC2 → Instances → `workshop-k3d` → **Connect** → **Session Manager** → **Connect** (no SSH needed). **EC2 Instance Connect** on the same page works too (SSH in the browser, user `ubuntu`).
+
+Prefer your own terminal? Put your public key (`cat ~/.ssh/id_ed25519.pub`) into `infra/terraform.tfvars` as `ssh_public_key = "ssh-ed25519 …"` **before your first push** (adding it later rebuilds the server), then `ssh ubuntu@<ip>`.
 
 ```bash
 sudo -i
@@ -249,5 +251,6 @@ Keep the repository: it is your portfolio project. Repeat Lab 0 and push again t
 | Health check waits with `now: dev` | Your Dockerfile is missing `ARG APP_VERSION`. |
 | Session Manager **Connect** is grey | Wait 2 minutes and refresh. |
 | `kubectl`: connection refused | Run `sudo -i` first. |
+| `ssh`: Permission denied (publickey) | No `ssh_public_key` in `terraform.tfvars`; use EC2 Instance Connect or Session Manager. |
 | `http://<ip>:30080` doesn't open on campus Wi-Fi | Many networks block odd ports. Use your phone, or `curl` from the Codespace. |
 | Codespace won't start | Press `.` on your repo page to edit in the browser; the pipeline still does the work. |

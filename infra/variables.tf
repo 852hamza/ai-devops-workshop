@@ -14,3 +14,15 @@ variable "enable_nodeport" {
   type        = bool
   default     = true
 }
+
+variable "enable_ssh" {
+  description = "Open port 22 to everyone (EC2 Instance Connect or your own key)."
+  type        = bool
+  default     = false
+}
+
+variable "ssh_public_key" {
+  description = "Optional: contents of your id_ed25519.pub, to SSH with your own key."
+  type        = string
+  default     = ""
+}

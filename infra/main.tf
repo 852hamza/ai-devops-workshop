@@ -28,7 +28,7 @@ data "aws_ami" "ubuntu" {
 
 resource "aws_security_group" "web" {
   name        = "workshop-web"
-  description = "HTTP for the ingress, optional NodePort. No SSH, we use SSM."
+  description = "HTTP for the ingress, optional NodePort and SSH."
   vpc_id      = data.aws_vpc.default.id
 }
 
@@ -49,6 +49,17 @@ resource "aws_vpc_security_group_ingress_rule" "nodeport" {
   ip_protocol       = "tcp"
   from_port         = 30080
   to_port           = 30080
+  cidr_ipv4         = "0.0.0.0/0"
+}
+
+resource "aws_vpc_security_group_ingress_rule" "ssh" {
+  count = var.enable_ssh ? 1 : 0
+
+  security_group_id = aws_security_group.web.id
+  description       = "SSH"
+  ip_protocol       = "tcp"
+  from_port         = 22
+  to_port           = 22
   cidr_ipv4         = "0.0.0.0/0"
 }
 
@@ -91,12 +102,22 @@ resource "aws_iam_instance_profile" "node" {
 
 # --- the server ---
 
+# Only needed for "ssh -i key ubuntu@<ip>" from your own machine.
+# EC2 Instance Connect in the console works without it.
+resource "aws_key_pair" "ssh" {
+  count = var.ssh_public_key != "" ? 1 : 0
+
+  key_name   = "workshop-key"
+  public_key = var.ssh_public_key
+}
+
 resource "aws_instance" "k3d" {
   ami                         = data.aws_ami.ubuntu.id
   instance_type               = var.instance_type
   subnet_id                   = sort(data.aws_subnets.default.ids)[0]
   vpc_security_group_ids      = [aws_security_group.web.id]
   iam_instance_profile        = aws_iam_instance_profile.node.name
+  key_name                    = one(aws_key_pair.ssh[*].key_name)
   associate_public_ip_address = true
 
   user_data                   = file("${path.module}/user_data.sh")
