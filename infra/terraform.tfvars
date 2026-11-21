@@ -1,2 +1,2 @@
-enable_nodeport = true
+enable_nodeport = false
 enable_ssh      = true
