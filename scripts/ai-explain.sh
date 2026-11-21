@@ -6,8 +6,8 @@
 # needs GEMINI_API_KEY (free key from https://aistudio.google.com/apikey), optional GEMINI_MODEL
 set -euo pipefail
 
-model=${GEMINI_MODEL:-gemini-3.8-flash}
-url="https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent"
+# Free models get busy (HTTP 503) at peak times; when one is busy, the next one usually isn't.
+models="${GEMINI_MODEL:-gemini-3.8-flash} gemini-3.6-flash gemini-3.5-flash-lite"
 
 body=$(jq -n \
   --rawfile system .github/prompts/explain-failure.txt \
@@ -18,21 +18,29 @@ body=$(jq -n \
     generationConfig: {maxOutputTokens: 4096}
   }')
 
-# The free tier often answers 503 (busy) or 429 (rate limit) for a moment, so try 3 times.
-for attempt in 1 2 3; do
-  resp=$(curl -sS --max-time 90 -w '\n%{http_code}' \
+ask() {
+  local url="https://generativelanguage.googleapis.com/v1beta/models/$1:generateContent"
+  curl -sS --max-time 90 -w '\n%{http_code}' \
     -H "x-goog-api-key: $GEMINI_API_KEY" \
     -H "Content-Type: application/json" \
-    -d "$body" "$url") || resp=$'\n000'
-  code=${resp##*$'\n'}
-  resp=${resp%$'\n'*}
-  [ "$code" = 200 ] && break
+    -d "$body" "$url" || printf '\n000'
+}
 
-  echo "Gemini attempt $attempt: HTTP $code $(jq -r '.error.message // empty' <<< "$resp" 2>/dev/null | head -c 300)" >&2
-  case $code in
-    429 | 500 | 503 | 000) [ "$attempt" -lt 3 ] && sleep $((attempt * 15)) ;;
-    *) exit 1 ;;
-  esac
+code=000
+for model in $(tr ' ' '\n' <<< "$models" | awk 'NF && !seen[$0]++'); do
+  for attempt in 1 2; do
+    resp=$(ask "$model")
+    code=${resp##*$'\n'}
+    resp=${resp%$'\n'*}
+    [ "$code" = 200 ] && break 2
+
+    echo "$model attempt $attempt: HTTP $code $(jq -r '.error.message // empty' <<< "$resp" 2>/dev/null | head -c 300)" >&2
+    case $code in
+      429 | 500 | 503 | 000) [ "$attempt" = 1 ] && sleep 10 ;; # busy: wait once, then next model
+      404) break ;;                                             # unknown model name: next model
+      *) exit 1 ;;                                              # e.g. 400 wrong key: no point retrying
+    esac
+  done
 done
 [ "$code" = 200 ] || exit 1
 
@@ -42,4 +50,5 @@ if [ -z "$answer" ]; then
   exit 1
 fi
 
+echo "Answered by $model" >&2
 printf '%s\n' "$answer"
